@@ -1,1 +1,1 @@
-# edumart
+# coursemart
