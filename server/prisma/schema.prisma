@@ -1,0 +1,256 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────── Enums ─────────────
+
+enum Role {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+enum InstructorStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+enum CourseStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+  UNPUBLISHED
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ALL_LEVELS
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ───────────── Users ─────────────
+
+model UserProfile {
+  id        String   @id @db.Uuid
+  roles     Role[]   @default([STUDENT])
+  isBanned  Boolean  @default(false) @map("is_banned")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  instructorProfile InstructorProfile?
+  enrollments       Enrollment[]
+  progress          LessonProgress[]
+  review            Review[]
+  orders            Order[]
+
+  @@map("user_profiles")
+}
+
+model InstructorProfile {
+  id          Int            @id @default(autoincrement())
+  userId      String            @unique @map("user_id") @db.Uuid
+  displayname String            @map("display_name") @db.VarChar(255)
+  slug        String            @unique @db.VarChar(255)
+  headline    String?           @db.VarChar(255)
+  bio         String?
+  avatarUrl   String?           @map("avatar_url")
+  bannerUrl   String?           @map("banner_url")
+  expertise   Json              @default("[]")
+  status      InstructorStatus  @default(PENDING)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user    UserProfile      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses Course[]
+}
+
+// ───────────── Catalog ─────────────
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique @db.VarChar(255)
+  slug      String    @unique @db.VarChar(255)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  courses Course[]
+
+  @@map("categories")
+}
+
+model Course {
+  id               Int          @id @default(autoincrement())
+  instructorId     Int          @map("instructor_id")
+  categoryId       Int?         @map("category_id")
+  title            String       @db.VarChar(255)
+  slug             String       @unique @db.VarChar(255)
+  subtitle         String?      @db.VarChar(255)
+  description      String?
+  price            Decimal      @default(0) @db.Decimal(10, 2) // 0 = free
+  currency         String       @default("ETB") @db.VarChar(10)
+  level            CourseLevel  @default(ALL_LEVELS)
+  language         String       @default("en") @db.VarChar(10)
+  thumbnailUrl     String?      @map("thumbnail_url")
+  previewVideoUrl  String?      @map("preview_video_url")
+  status           CourseStatus @default(DRAFT)
+  rejectionReason  String?      @map("rejection_reason")
+  publishedAt      DateTime?    @map("published_at") @db.Timestamp(6)
+
+  // denormalized counters so listing pages stay fast
+  ratingAvg        Decimal      @default(0) @map("rating_avg") @db.Decimal(2, 1)
+  ratingCount      Int          @default(0) @map("rating_count")
+  enrollmentCount  Int          @default(0) @map("enrollment_count")
+
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  instructor  InstructorProfile @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  category    Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  sections    Section[]
+  enrollments Enrollment[]
+  reviews     Review[]
+  orderItems  OrderItem[]
+
+  @@index([instructorId], map: "idx_courses_instructor")
+  @@index([categoryId], map: "idx_courses_category")
+  @@index([status], map: "idx_courses_status")
+  @@map("courses")
+}
+
+model Section {
+  id        Int    @id @default(autoincrement())
+  courseId  Int    @map("course_id")
+  title     String @db.VarChar(255)
+  position  Int    @default(0)
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId], map: "idx_sections_course")
+  @@map("sections")
+}
+
+model Lesson {
+  id              Int     @id @default(autoincrement())
+  sectionId       Int     @map("section_id")
+  title           String  @db.VarChar(255)
+  position        Int     @default(0)
+  videoUrl        String? @map("video_url")
+  durationSeconds Int?    @map("duration_seconds")
+  content         String? // text/notes for the lesson
+  resources       Json?   @default("[]") // downloadable files
+  isFreePreview   Boolean @default(false) @map("is_free_preview")
+
+  section  Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  progress LessonProgress[]
+
+  @@index([sectionId], map: "idx_lessons_section")
+  @@map("lessons")
+}
+
+// ───────────── Learning ─────────────
+
+model Enrollment {
+  id          Int              @id @default(autoincrement())
+  userId      String           @map("user_id") @db.Uuid
+  courseId    Int              @map("course_id")
+  status      EnrollmentStatus @default(ACTIVE)
+  enrolledAt  DateTime         @default(now()) @map("enrolled_at") @db.Timestamp(6)
+  completedAt DateTime?        @map("completed_at") @db.Timestamp(6)
+
+  user   UserProfile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, courseId])
+  @@index([courseId], map: "idx_enrollments_course")
+  @@map("enrollments")
+}
+
+model LessonProgress {
+  userId              String    @map("user_id") @db.Uuid
+  lessonId            Int       @map("lesson_id")
+  lastPositionSeconds Int       @default(0) @map("last_position_seconds")
+  completedAt         DateTime? @map("completed_at") @db.Timestamp(6)
+
+  user   UserProfile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@id([userId, lessonId])
+  @@map("lesson_progress")
+}
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.Uuid
+  courseId  Int      @map("course_id")
+  rating    Int      // 1–5, validate in your API
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user   UserProfile   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId]) // one review per student per course
+  @@index([courseId], map: "idx_reviews_course")
+  @@map("reviews")
+}
+
+// ───────────── Payments ─────────────
+
+model Order {
+  id            Int           @id @default(autoincrement())
+  orderNumber   String        @unique @map("order_number") @db.VarChar(100)
+  userId        String        @map("user_id") @db.Uuid
+  subtotal      Decimal       @db.Decimal(10, 2)
+  discount      Decimal       @default(0) @db.Decimal(10, 2)
+  total         Decimal       @db.Decimal(10, 2)
+  couponCode    String?       @map("coupon_code") @db.VarChar(50)
+  paymentStatus PaymentStatus @default(PENDING) @map("payment_status")
+  paymentMethod String?       @map("payment_method") @db.VarChar(50)
+  paymentRef    String?       @map("payment_ref") @db.VarChar(255) // gateway transaction id
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user  UserProfile        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items OrderItem[]
+
+  @@index([userId], map: "idx_orders_user")
+  @@map("orders")
+}
+
+model OrderItem {
+  id               Int     @id @default(autoincrement())
+  orderId          Int     @map("order_id")
+  courseId         Int     @map("course_id")
+  titleSnapshot    String  @map("title_snapshot") @db.VarChar(255)
+  priceAtPurchase  Decimal @map("price_at_purchase") @db.Decimal(10, 2)
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Restrict)
+
+  @@index([orderId], map: "idx_order_items_order")
+  @@map("order_items")
+}
